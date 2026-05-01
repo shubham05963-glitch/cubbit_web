@@ -3,18 +3,42 @@ const http = require("http");
 const { Server } = require("socket.io");
 const admin = require("firebase-admin");
 
+const isProduction = process.env.NODE_ENV === "production";
+const logDev = (...args) => {
+  if (!isProduction) {
+    console.log(...args);
+  }
+};
+
 function normalizePrivateKey(value) {
   if (!value) return "";
   return value.toString().replace(/\\n/g, "\n").trim();
+}
+
+function sanitizeString(value, maxLen = 512) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim().slice(0, maxLen);
+}
+
+function isValidUid(value) {
+  return /^[A-Za-z0-9_-]{6,128}$/.test(value);
+}
+
+function isValidCallId(value) {
+  return /^[A-Za-z0-9_-]{6,128}$/.test(value);
+}
+
+function isValidToken(value) {
+  return value.length >= 20 && value.length <= 4096;
 }
 
 const FIREBASE_PROJECT_ID = (process.env.FIREBASE_PROJECT_ID || "").trim();
 const FIREBASE_CLIENT_EMAIL = (process.env.FIREBASE_CLIENT_EMAIL || "").trim();
 const FIREBASE_PRIVATE_KEY = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
 
-console.log("ENV PROJECT ID:", FIREBASE_PROJECT_ID || "<missing>");
-console.log("ENV CLIENT EMAIL:", FIREBASE_CLIENT_EMAIL || "<missing>");
-console.log("ENV PRIVATE KEY EXISTS:", !!FIREBASE_PRIVATE_KEY);
+logDev("ENV PROJECT ID:", FIREBASE_PROJECT_ID || "<missing>");
+logDev("ENV CLIENT EMAIL:", FIREBASE_CLIENT_EMAIL || "<missing>");
+logDev("ENV PRIVATE KEY EXISTS:", !!FIREBASE_PRIVATE_KEY);
 
 let db = null;
 try {
@@ -37,12 +61,12 @@ try {
         privateKey: FIREBASE_PRIVATE_KEY,
       }),
     });
-    console.log("[Firebase] Admin initialized with explicit Render env config");
+    logDev("[Firebase] Admin initialized with explicit Render env config");
   }
   db = admin.firestore();
-  console.log("DB project:", admin.app().options.projectId);
+  logDev("DB project:", admin.app().options.projectId);
 } catch (e) {
-  console.error("[Firebase] init error:", e.message);
+  console.error("[Firebase] init error");
 }
 
 const PORT = process.env.PORT || 3001;
@@ -65,16 +89,21 @@ app.get("/health", (_req, res) => {
 });
 
 app.post("/save-token", async (req, res) => {
-  const userId = (req.body?.userId || "").toString().trim();
-  const token = (req.body?.token || "").toString().trim();
+  const userId = sanitizeString(req.body?.userId, 128);
+  const token = sanitizeString(req.body?.token, 4096);
   if (!userId || !token) {
     return res.status(400).json({ ok: false, error: "userId and token required" });
+  }
+  if (!isValidUid(userId)) {
+    return res.status(400).json({ ok: false, error: "invalid userId" });
+  }
+  if (!isValidToken(token)) {
+    return res.status(400).json({ ok: false, error: "invalid token" });
   }
   if (!db) {
     return res.status(500).json({ ok: false, error: "Firestore unavailable" });
   }
   try {
-    console.log("Saving token:", userId, token);
     await db.collection("users").doc(userId).set(
       {
         tokens: admin.firestore.FieldValue.arrayUnion(token),
@@ -84,18 +113,20 @@ app.post("/save-token", async (req, res) => {
     const doc = await db.collection("users").doc(userId).get();
     const data = doc.data() || {};
     const tokens = Array.isArray(data.tokens) ? data.tokens : [];
-    console.log("After save doc:", userId, data);
     return res.json({ ok: true, userId, tokenCount: tokens.length });
   } catch (e) {
-    console.error("save-token failed:", e);
+    console.error("save-token failed");
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
 app.get("/tokens/:userId", async (req, res) => {
-  const userId = (req.params?.userId || "").toString().trim();
+  const userId = sanitizeString(req.params?.userId, 128);
   if (!userId) {
     return res.status(400).json({ ok: false, error: "userId required" });
+  }
+  if (!isValidUid(userId)) {
+    return res.status(400).json({ ok: false, error: "invalid userId" });
   }
   if (!db) {
     return res.status(500).json({ ok: false, error: "Firestore unavailable" });
@@ -103,55 +134,34 @@ app.get("/tokens/:userId", async (req, res) => {
   try {
     const doc = await db.collection("users").doc(userId).get();
     const tokens = Array.isArray(doc.data()?.tokens) ? doc.data().tokens : [];
-    console.log("Fetched tokens:", userId, tokens);
     return res.json({
       ok: true,
       userId,
       tokenCount: tokens.length,
-      tokens,
     });
   } catch (e) {
-    console.error("tokens lookup failed:", e);
-    return res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Debug helper: list recent users that have a non-empty tokens array.
-app.get("/debug/tokens", async (_req, res) => {
-  if (!db) {
-    return res.status(500).json({ ok: false, error: "Firestore unavailable" });
-  }
-  try {
-    const snap = await db.collection("users").get();
-    const users = [];
-    snap.forEach((doc) => {
-      const data = doc.data() || {};
-      const tokens = Array.isArray(data.tokens) ? data.tokens : [];
-      console.log("Doc:", doc.id, data);
-      users.push({
-        userId: doc.id,
-        tokenCount: tokens.length,
-        tokens,
-      });
-    });
-    return res.json({
-      ok: true,
-      projectId: FIREBASE_PROJECT_ID,
-      users,
-    });
-  } catch (e) {
-    console.error("debug/tokens failed:", e);
+    console.error("tokens lookup failed");
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
 app.post("/api/call-invite", async (req, res) => {
-  const { callId, callerUid, callerName, calleeUid, isVideo, chatId } =
-    req.body || {};
+  const callId = sanitizeString(req.body?.callId, 128);
+  const callerUid = sanitizeString(req.body?.callerUid, 128);
+  const callerName = sanitizeString(req.body?.callerName, 120);
+  const calleeUid = sanitizeString(req.body?.calleeUid, 128);
+  const chatId = sanitizeString(req.body?.chatId, 128);
+  const isVideo = Boolean(req.body?.isVideo);
   if (!callId || !callerUid || !calleeUid) {
     return res
       .status(400)
       .json({ ok: false, error: "callId, callerUid, calleeUid required" });
+  }
+  if (!isValidCallId(callId)) {
+    return res.status(400).json({ ok: false, error: "invalid callId" });
+  }
+  if (!isValidUid(callerUid) || !isValidUid(calleeUid)) {
+    return res.status(400).json({ ok: false, error: "invalid uid" });
   }
   if (admin.apps.length === 0) {
     return res
@@ -176,12 +186,12 @@ app.post("/api/call-invite", async (req, res) => {
     tokens,
     data: {
       type: "call_invite",
-      callId: String(callId),
-      callerUid: String(callerUid),
+      callId,
+      callerUid,
       callerName: title,
-      calleeUid: String(calleeUid),
+      calleeUid,
       isVideo: String(!!isVideo),
-      ...(chatId ? { chatId: String(chatId) } : {}),
+      ...(chatId ? { chatId } : {}),
       title,
       body,
     },
@@ -204,9 +214,16 @@ app.post("/api/call-invite", async (req, res) => {
 
 // Backward-compatible generic notify endpoint.
 app.post("/api/notify", async (req, res) => {
-  const { tokens, data, notificationTitle, notificationBody, highPriority } =
-    req.body || {};
-  if (!Array.isArray(tokens) || tokens.length === 0) {
+  const tokensInput = Array.isArray(req.body?.tokens) ? req.body.tokens : [];
+  const tokens = tokensInput
+    .map((token) => sanitizeString(token, 4096))
+    .filter((token) => isValidToken(token))
+    .slice(0, 500);
+  const data = req.body?.data && typeof req.body.data === "object" ? req.body.data : {};
+  const notificationTitle = sanitizeString(req.body?.notificationTitle, 120);
+  const notificationBody = sanitizeString(req.body?.notificationBody, 240);
+  const highPriority = Boolean(req.body?.highPriority);
+  if (tokens.length === 0) {
     return res.status(400).json({ ok: false, error: "tokens required" });
   }
   if (admin.apps.length === 0) {
@@ -236,44 +253,58 @@ app.post("/api/notify", async (req, res) => {
 
 io.on("connection", (socket) => {
   socket.on("join", ({ callId, uid }) => {
-    if (!callId) return;
-    socket.join(callId);
-    socket.data.callId = callId;
-    socket.data.uid = uid || "";
+    const cleanCallId = sanitizeString(callId, 128);
+    const cleanUid = sanitizeString(uid, 128);
+    if (!isValidCallId(cleanCallId)) return;
+    socket.join(cleanCallId);
+    socket.data.callId = cleanCallId;
+    socket.data.uid = cleanUid;
   });
 
   socket.on("offer", ({ callId, sdp, type, from }) => {
-    if (!callId) return;
-    socket.to(callId).emit("offer", { sdp, type, from });
+    const cleanCallId = sanitizeString(callId, 128);
+    if (!isValidCallId(cleanCallId)) return;
+    socket.to(cleanCallId).emit("offer", {
+      sdp,
+      type: sanitizeString(type, 24),
+      from: sanitizeString(from, 128),
+    });
   });
 
   socket.on("answer", ({ callId, sdp, type, from }) => {
-    if (!callId) return;
-    socket.to(callId).emit("answer", { sdp, type, from });
+    const cleanCallId = sanitizeString(callId, 128);
+    if (!isValidCallId(cleanCallId)) return;
+    socket.to(cleanCallId).emit("answer", {
+      sdp,
+      type: sanitizeString(type, 24),
+      from: sanitizeString(from, 128),
+    });
   });
 
   socket.on("candidate", ({ callId, candidate, sdpMid, sdpMLineIndex, from }) => {
-    if (!callId) return;
-    socket.to(callId).emit("candidate", {
+    const cleanCallId = sanitizeString(callId, 128);
+    if (!isValidCallId(cleanCallId)) return;
+    socket.to(cleanCallId).emit("candidate", {
       candidate,
-      sdpMid,
+      sdpMid: sanitizeString(sdpMid, 64),
       sdpMLineIndex,
-      from
+      from: sanitizeString(from, 128),
     });
   });
 
   socket.on("end", ({ callId }) => {
-    if (!callId) return;
-    socket.to(callId).emit("end", {});
+    const cleanCallId = sanitizeString(callId, 128);
+    if (!isValidCallId(cleanCallId)) return;
+    socket.to(cleanCallId).emit("end", {});
   });
 });
 
 server.listen(PORT, () => {
-  console.log("Server started");
-  console.log("Tokens route loaded");
+  logDev("Server started");
+  logDev("Tokens route loaded");
   if (app._router?.stack) {
     app._router.stack.forEach((r) => {
-      if (r.route) console.log("Route:", r.route.path);
+      if (r.route) logDev("Route:", r.route.path);
     });
   }
   console.log(`Signaling server listening on ${PORT}`);
