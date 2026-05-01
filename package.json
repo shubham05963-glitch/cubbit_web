@@ -1,0 +1,13 @@
+{
+  "name": "cubbit-web-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Root build wrapper for Render deployment",
+  "scripts": {
+    "build": "npm --prefix signaling-server install",
+    "start": "node signaling-server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
