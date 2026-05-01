@@ -61,19 +61,37 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-// Debug token store for this backend instance.
-const tokensByUser = new Map();
+function getDb() {
+  if (admin.apps.length === 0) return null;
+  return admin.firestore();
+}
 
-app.post("/save-token", (req, res) => {
+app.post("/save-token", async (req, res) => {
   const userId = (req.body?.userId || "").toString().trim();
   const token = (req.body?.token || "").toString().trim();
   if (!userId || !token) {
     return res.status(400).json({ ok: false, error: "userId and token required" });
   }
-  const set = tokensByUser.get(userId) || new Set();
-  set.add(token);
-  tokensByUser.set(userId, set);
-  return res.json({ ok: true, userId, tokenCount: set.size });
+  const db = getDb();
+  if (!db) {
+    return res.status(500).json({ ok: false, error: "Firestore unavailable" });
+  }
+  try {
+    console.log("Saving token:", userId, token);
+    await db.collection("users").doc(userId).set(
+      {
+        tokens: admin.firestore.FieldValue.arrayUnion(token),
+      },
+      { merge: true }
+    );
+    const doc = await db.collection("users").doc(userId).get();
+    const tokens = Array.isArray(doc.data()?.tokens) ? doc.data().tokens : [];
+    console.log("Fetched tokens after save:", tokens);
+    return res.json({ ok: true, userId, tokenCount: tokens.length });
+  } catch (e) {
+    console.error("save-token failed:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 app.get("/tokens/:userId", async (req, res) => {
@@ -81,13 +99,24 @@ app.get("/tokens/:userId", async (req, res) => {
   if (!userId) {
     return res.status(400).json({ ok: false, error: "userId required" });
   }
-  const set = tokensByUser.get(userId) || new Set();
-  return res.json({
-    ok: true,
-    userId,
-    tokenCount: set.size,
-    tokens: [...set],
-  });
+  const db = getDb();
+  if (!db) {
+    return res.status(500).json({ ok: false, error: "Firestore unavailable" });
+  }
+  try {
+    const doc = await db.collection("users").doc(userId).get();
+    const tokens = Array.isArray(doc.data()?.tokens) ? doc.data().tokens : [];
+    console.log("Fetched tokens:", userId, tokens);
+    return res.json({
+      ok: true,
+      userId,
+      tokenCount: tokens.length,
+      tokens,
+    });
+  } catch (e) {
+    console.error("tokens lookup failed:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 app.post("/api/call-invite", async (req, res) => {
@@ -104,7 +133,14 @@ app.post("/api/call-invite", async (req, res) => {
       .json({ ok: false, error: "Firebase Admin not initialized" });
   }
 
-  const tokens = [...(tokensByUser.get(String(calleeUid).trim()) || new Set())];
+  const db = getDb();
+  if (!db) {
+    return res
+      .status(500)
+      .json({ ok: false, error: "Firestore unavailable" });
+  }
+  const doc = await db.collection("users").doc(String(calleeUid).trim()).get();
+  const tokens = Array.isArray(doc.data()?.tokens) ? doc.data().tokens : [];
   if (tokens.length === 0) {
     return res.status(404).json({ ok: false, error: "No tokens for calleeUid" });
   }
