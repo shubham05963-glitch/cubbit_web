@@ -16,6 +16,7 @@ console.log("ENV PROJECT ID:", FIREBASE_PROJECT_ID || "<missing>");
 console.log("ENV CLIENT EMAIL:", FIREBASE_CLIENT_EMAIL || "<missing>");
 console.log("ENV PRIVATE KEY EXISTS:", !!FIREBASE_PRIVATE_KEY);
 
+let db = null;
 try {
   if (admin.apps.length === 0) {
     if (!FIREBASE_PROJECT_ID) {
@@ -38,6 +39,8 @@ try {
     });
     console.log("[Firebase] Admin initialized with explicit Render env config");
   }
+  db = admin.firestore();
+  console.log("DB project:", admin.app().options.projectId);
 } catch (e) {
   console.error("[Firebase] init error:", e.message);
 }
@@ -61,18 +64,12 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-function getDb() {
-  if (admin.apps.length === 0) return null;
-  return admin.firestore();
-}
-
 app.post("/save-token", async (req, res) => {
   const userId = (req.body?.userId || "").toString().trim();
   const token = (req.body?.token || "").toString().trim();
   if (!userId || !token) {
     return res.status(400).json({ ok: false, error: "userId and token required" });
   }
-  const db = getDb();
   if (!db) {
     return res.status(500).json({ ok: false, error: "Firestore unavailable" });
   }
@@ -85,8 +82,9 @@ app.post("/save-token", async (req, res) => {
       { merge: true }
     );
     const doc = await db.collection("users").doc(userId).get();
-    const tokens = Array.isArray(doc.data()?.tokens) ? doc.data().tokens : [];
-    console.log("Fetched tokens after save:", tokens);
+    const data = doc.data() || {};
+    const tokens = Array.isArray(data.tokens) ? data.tokens : [];
+    console.log("After save doc:", userId, data);
     return res.json({ ok: true, userId, tokenCount: tokens.length });
   } catch (e) {
     console.error("save-token failed:", e);
@@ -99,7 +97,6 @@ app.get("/tokens/:userId", async (req, res) => {
   if (!userId) {
     return res.status(400).json({ ok: false, error: "userId required" });
   }
-  const db = getDb();
   if (!db) {
     return res.status(500).json({ ok: false, error: "Firestore unavailable" });
   }
@@ -121,22 +118,21 @@ app.get("/tokens/:userId", async (req, res) => {
 
 // Debug helper: list recent users that have a non-empty tokens array.
 app.get("/debug/tokens", async (_req, res) => {
-  const db = getDb();
   if (!db) {
     return res.status(500).json({ ok: false, error: "Firestore unavailable" });
   }
   try {
-    const snap = await db.collection("users").limit(30).get();
+    const snap = await db.collection("users").get();
     const users = [];
     snap.forEach((doc) => {
       const data = doc.data() || {};
       const tokens = Array.isArray(data.tokens) ? data.tokens : [];
-      if (tokens.length > 0) {
-        users.push({
-          userId: doc.id,
-          tokenCount: tokens.length,
-        });
-      }
+      console.log("Doc:", doc.id, data);
+      users.push({
+        userId: doc.id,
+        tokenCount: tokens.length,
+        tokens,
+      });
     });
     return res.json({
       ok: true,
@@ -163,7 +159,6 @@ app.post("/api/call-invite", async (req, res) => {
       .json({ ok: false, error: "Firebase Admin not initialized" });
   }
 
-  const db = getDb();
   if (!db) {
     return res
       .status(500)
