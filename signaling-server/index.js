@@ -3,9 +3,40 @@ const http = require("http");
 const { Server } = require("socket.io");
 const admin = require("firebase-admin");
 
+function normalizePrivateKey(value) {
+  if (!value) return "";
+  return value.toString().replace(/\\n/g, "\n").trim();
+}
+
+const FIREBASE_PROJECT_ID = (process.env.FIREBASE_PROJECT_ID || "").trim();
+const FIREBASE_CLIENT_EMAIL = (process.env.FIREBASE_CLIENT_EMAIL || "").trim();
+const FIREBASE_PRIVATE_KEY = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
+
+console.log("ENV PROJECT ID:", FIREBASE_PROJECT_ID || "<missing>");
+console.log("ENV CLIENT EMAIL:", FIREBASE_CLIENT_EMAIL || "<missing>");
+console.log("ENV PRIVATE KEY EXISTS:", !!FIREBASE_PRIVATE_KEY);
+
 try {
   if (admin.apps.length === 0) {
-    admin.initializeApp();
+    if (!FIREBASE_PROJECT_ID) {
+      throw new Error("FIREBASE_PROJECT_ID is missing");
+    }
+    if (!FIREBASE_CLIENT_EMAIL) {
+      throw new Error("FIREBASE_CLIENT_EMAIL is missing");
+    }
+    if (!FIREBASE_PRIVATE_KEY) {
+      throw new Error("FIREBASE_PRIVATE_KEY is missing");
+    }
+
+    admin.initializeApp({
+      projectId: FIREBASE_PROJECT_ID,
+      credential: admin.credential.cert({
+        projectId: FIREBASE_PROJECT_ID,
+        clientEmail: FIREBASE_CLIENT_EMAIL,
+        privateKey: FIREBASE_PRIVATE_KEY,
+      }),
+    });
+    console.log("[Firebase] Admin initialized with explicit Render env config");
   }
 } catch (e) {
   console.error("[Firebase] init error:", e.message);
