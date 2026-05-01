@@ -7,6 +7,14 @@
     "build": "npm --prefix signaling-server install",
     "start": "node signaling-server/index.js"
   },
+  "dependencies": {
+    "body-parser": "^2.2.2",
+    "cors": "^2.8.6",
+    "express": "^4.22.1",
+    "firebase-admin": "^13.7.0",
+    "socket.io": "^4.7.5",
+    "nodemailer": "^7.0.10"
+  },
   "engines": {
     "node": ">=18"
   }
