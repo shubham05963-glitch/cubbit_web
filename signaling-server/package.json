@@ -1,17 +1,14 @@
 {
-  "name": "notification-socket-server",
+  "name": "webrtc-signaling-server",
   "version": "1.0.0",
   "private": true,
-  "description": "Socket.IO notification relay server for the Flutter app",
+  "description": "Simple WebRTC signaling server for the Flutter app",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "body-parser": "^2.2.2",
-    "cors": "^2.8.6",
-    "express": "^4.22.1",
-    "firebase-admin": "^13.7.0",
+    "express": "^4.19.2",
     "socket.io": "^4.7.5"
   }
 }
