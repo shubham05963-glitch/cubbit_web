@@ -119,6 +119,36 @@ app.get("/tokens/:userId", async (req, res) => {
   }
 });
 
+// Debug helper: list recent users that have a non-empty tokens array.
+app.get("/debug/tokens", async (_req, res) => {
+  const db = getDb();
+  if (!db) {
+    return res.status(500).json({ ok: false, error: "Firestore unavailable" });
+  }
+  try {
+    const snap = await db.collection("users").limit(30).get();
+    const users = [];
+    snap.forEach((doc) => {
+      const data = doc.data() || {};
+      const tokens = Array.isArray(data.tokens) ? data.tokens : [];
+      if (tokens.length > 0) {
+        users.push({
+          userId: doc.id,
+          tokenCount: tokens.length,
+        });
+      }
+    });
+    return res.json({
+      ok: true,
+      projectId: FIREBASE_PROJECT_ID,
+      users,
+    });
+  } catch (e) {
+    console.error("debug/tokens failed:", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.post("/api/call-invite", async (req, res) => {
   const { callId, callerUid, callerName, calleeUid, isVideo, chatId } =
     req.body || {};
